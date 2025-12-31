@@ -6,7 +6,9 @@ from nba_api.stats.endpoints import playergamelog, leaguedashplayerstats, common
 from nba_api.stats.static import players
 
 # --- PAGE CONFIGURATION (The "Razzle Dazzle") ---
-st.set_page_config(page_title="NBA Wealth Builder", page_icon="🏀", layout="wide")
+st.set_page_config(page_title="CourtVision AI", page_icon="🧠", layout="wide")
+# ... (keep your css code) ...
+st.title("🧠 CourtVision AI")
 
 # --- CSS HACKS FOR VISUALS ---
 st.markdown("""
@@ -138,4 +140,5 @@ with col2:
     st.subheader("🔥 League Leaders (PTS)")
     # Load the cached trend data
     df_trends = get_league_trends()
+
     st.dataframe(df_trends[['Name', 'Team', 'PPG']].head(10), hide_index=True)
