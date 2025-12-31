@@ -2,8 +2,9 @@ import streamlit as st
 import pandas as pd
 import requests
 import google.generativeai as genai
+import time
 from io import StringIO
-from nba_api.stats.endpoints import playergamelog, leaguedashplayerstats, commonplayerinfo
+from nba_api.stats.endpoints import playergamelog, leaguedashplayerstats
 from nba_api.stats.static import players
 
 # --- PAGE CONFIGURATION ---
@@ -11,32 +12,17 @@ st.set_page_config(page_title="CourtVision AI", page_icon="🧠", layout="wide")
 st.title("🧠 CourtVision AI")
 
 # --- CONFIGURE GEMINI AI ---
-# This looks for the key in your Streamlit Secrets
 try:
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
 except:
-    pass # We will show a friendly error in the chat tab if key is missing
+    pass
 
-# --- CSS HACKS (Stealth Mode) ---
+# --- CSS HACKS ---
 st.markdown("""
 <style>
-    /* Hide the Streamlit "Manage App" button and top decoration bar */
-    .stAppDeployButton, [data-testid="stDecoration"] {
-        display: none !important;
-    }
-    
-    /* Hide the "Made with Streamlit" footer */
-    footer {
-        visibility: hidden;
-    }
-    
-    /* Hide the entire top toolbar (Hamburger menu + Deploy + Edit buttons) */
-    [data-testid="stToolbar"] {
-        visibility: hidden;
-        height: 0%;
-    }
-
-    /* Card styles */
+    .stAppDeployButton, [data-testid="stDecoration"] { display: none !important; }
+    footer { visibility: hidden; }
+    [data-testid="stToolbar"] { visibility: hidden; height: 0%; }
     .metric-card {background-color: #f0f2f6; padding: 20px; border-radius: 10px; margin: 10px 0;}
     .big-font {font-size:20px !important;}
 </style>
@@ -59,42 +45,53 @@ def get_live_injuries():
     except:
         return {}
 
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=1200)  # Cache for 20 mins since this scrapes many players
 def get_league_trends():
-    # Fetching PER GAME stats
+    # 1. Get Top 15 Scorers (Season Avg)
     stats = leaguedashplayerstats.LeagueDashPlayerStats(season='2024-25', per_mode_detailed='PerGame').get_data_frames()[0]
-    top_players = stats.sort_values(by='PTS', ascending=False).head(30)
+    top_players = stats.sort_values(by='PTS', ascending=False).head(15) # Limit to 15 to keep speed up
     
-    trends = []
+    trend_data = []
     
+    # 2. Loop through them to get "Last 5" context
     for _, p in top_players.iterrows():
-        trends.append({
-            "Name": p['PLAYER_NAME'],
-            "Team": p['TEAM_ABBREVIATION'],
-            "PPG": p['PTS'],
-            "ID": p['PLAYER_ID']
-        })
-    return pd.DataFrame(trends)
+        try:
+            # Fetch game logs for this specific player
+            logs = playergamelog.PlayerGameLog(player_id=p['PLAYER_ID'], season='2024-25').get_data_frames()[0]
+            
+            if not logs.empty:
+                last_5 = logs.head(5)
+                l5_ppg = last_5['PTS'].mean()
+                season_ppg = p['PTS']
+                delta = l5_ppg - season_ppg
+                
+                trend_data.append({
+                    "Player": p['PLAYER_NAME'],
+                    "Season PPG": round(season_ppg, 1),
+                    "Last 5 PPG": round(l5_ppg, 1),
+                    "Trend (Delta)": round(delta, 1),
+                    "Status": "🔥 Heating Up" if delta > 2.0 else "❄️ Cooling Down" if delta < -2.0 else "Zap"
+                })
+            time.sleep(0.1) # Tiny pause to be nice to NBA API
+        except:
+            continue
+            
+    return pd.DataFrame(trend_data)
 
 # --- CREATE TABS ---
 tab1, tab2 = st.tabs(["📊 Dashboard", "💬 The Oracle"])
 
 # ==========================================
-# TAB 1: THE ORIGINAL DASHBOARD
+# TAB 1: THE DASHBOARD
 # ==========================================
 with tab1:
     st.markdown("### *Daily Intelligence Agent*")
 
-    # 1. SIDEBAR (Moved inside Tab 1)
     with st.sidebar:
         st.header("🌞 Morning Briefing")
         st.info("Live Injury Report Loaded from CBS Sports")
-        
         injuries = get_live_injuries()
-        
-        # Check for Key Injuries
         watchlist = ["LeBron James", "Joel Embiid", "Giannis Antetokounmpo", "Stephen Curry"]
-        
         st.subheader("⚠️ Key Injury Watch")
         for star in watchlist:
             status = "Healthy"
@@ -102,11 +99,9 @@ with tab1:
                 if star in k:
                     status = f"🚨 {v}"
             st.write(f"**{star}:** {status}")
-            
         st.write("---")
         st.caption(f"Tracking {len(injuries)} total injuries today.")
 
-    # 2. MAIN AREA
     col1, col2 = st.columns([2, 1])
 
     with col1:
@@ -122,7 +117,6 @@ with tab1:
             else:
                 p = matching_players[0]
                 st.success(f"Found: {p['full_name']}")
-                
                 with st.spinner('Crunching numbers...'):
                     try:
                         career = leaguedashplayerstats.LeagueDashPlayerStats(season='2024-25', per_mode_detailed='PerGame').get_data_frames()[0]
@@ -132,7 +126,6 @@ with tab1:
                         if not player_season.empty and not logs.empty:
                             stats = player_season.iloc[0]
                             l5 = logs.head(5)
-                            
                             season_pra = stats['PTS'] + stats['REB'] + stats['AST']
                             l5_pra = l5['PTS'].mean() + l5['REB'].mean() + l5['AST'].mean()
                             delta = l5_pra - season_pra
@@ -142,87 +135,73 @@ with tab1:
                             m2.metric("Last 5 PRA", f"{l5_pra:.1f}", delta=f"{delta:.1f}")
                             m3.metric("Trend", "🔥 HOT" if delta > 0 else "❄️ COLD")
                             
-                            st.subheader("Recent Performance (PTS + REB + AST)")
+                            st.subheader("Recent Performance")
                             logs['PRA'] = logs['PTS'] + logs['REB'] + logs['AST']
                             chart_data = logs.head(10).iloc[::-1].set_index('GAME_DATE')[['PRA']]
                             st.line_chart(chart_data)
-                            
-                            st.info(f"💡 **Strategy Note:** If a key teammate is OUT, expect usage for {p['full_name']} to rise. Check the sidebar for injury alerts.")
-                            
                         else:
                             st.warning("No data found for 2024-25 season yet.")
-                            
                     except Exception as e:
                         st.error(f"Error fetching data: {e}")
 
     with col2:
-        st.subheader("🔥 League Leaders (PTS)")
+        st.subheader("🔥 Trends (Top 15 Scorers)")
+        # Now we use the NEW function that actually has Last 5 data
         df_trends = get_league_trends()
-        st.dataframe(df_trends[['Name', 'Team', 'PPG']].head(10), hide_index=True)
+        st.dataframe(df_trends[['Player', 'Trend (Delta)', 'Status']].head(10), hide_index=True)
 
 # ==========================================
 # TAB 2: THE ORACLE (GEMINI CHATBOT)
 # ==========================================
 with tab2:
     st.header("Ask the AI Analyst")
-    st.info("💡 I have read today's injury reports and trend lines. Ask me anything.")
+    st.info("💡 I have read today's injury reports and calculated the Last-5-Game trends for top scorers.")
 
-    # Check if API Key is set
     if "GOOGLE_API_KEY" not in st.secrets:
-        st.error("⚠️ **Missing AI Key:** Please add `GOOGLE_API_KEY` to your Streamlit Secrets to enable the chat.")
+        st.error("⚠️ **Missing AI Key:** Please add `GOOGLE_API_KEY` to your Streamlit Secrets.")
     else:
-        # 1. Initialize Chat History
         if "messages" not in st.session_state:
             st.session_state.messages = []
 
-        # 2. Display Old Messages
         for message in st.session_state.messages:
             with st.chat_message(message["role"]):
                 st.markdown(message["content"])
 
-        # 3. Handle New User Input
-        if prompt := st.chat_input("Ex: How does Embiid being out affect Maxey?"):
-            # Show User Message
+        if prompt := st.chat_input("Ex: Who is heating up right now?"):
             with st.chat_message("user"):
                 st.markdown(prompt)
             st.session_state.messages.append({"role": "user", "content": prompt})
 
-            # 4. Prepare Data Context for Gemini
+            # Prepare Data Context
             injuries_data = get_live_injuries()
+            # This now returns the table WITH "Last 5 PPG" and "Delta" columns
             trends_data = get_league_trends()
             
-            # Create the "Source of Truth" Context
             context_text = f"""
-            LIVE DATA SOURCE (Use this as your Primary Source):
+            LIVE DATA SOURCE (Primary Truth):
             
-            1. INJURY REPORT (Live from CBS Sports):
+            1. INJURY REPORT (CBS Sports):
             {injuries_data}
             
-            2. LEAGUE TRENDS (Top 30 Scorers - Last 5 Games vs Season Avg):
+            2. TOP SCORER TRENDS (Calculated Last 5 Games vs Season):
             {trends_data.to_string()}
             """
 
-            # 5. Call Gemini with CUSTOM INSTRUCTIONS
             try:
-                # Configure the model
+                # --- FIXED MODEL NAME ---
                 model = genai.GenerativeModel('gemini-2.5-flash')
                 
                 full_prompt = f"""
                 SYSTEM ROLE:
-                You are "Daily NBA Analyst," an expert AI basketball analyst specializing in the current 2024-25 NBA season. 
-                Your goal is to provide accurate, insightful, conversational answers using the LIVE DATA provided below.
-
-                CORE RULES (Follow Exactly):
-                1. **Data Authority:** The "LIVE DATA SOURCE" below is your absolute source of truth. It is live and up-to-date. Do not hallucinate stats not shown here.
-                2. **Reasoning Process (Internal):**
-                   - Compare "Last 5 Games" averages against "Season" averages.
-                   - Identify significant deviations: ±10% or more = notable; ±20%+ = strong over/underperformance.
-                   - Check Injury Report: If a key teammate is OUT, explicitly analyze the impact on usage.
-                   - Show transparent math: e.g., "Season: 29.8 | Last 7: 33.2 → +3.4 delta (hot streak)".
-                3. **Response Style:**
-                   - Conversational and engaging — like a sharp hoops friend at the bar.
-                   - Use clean markdown tables for comparisons.
-                   - Be concise unless a deep dive is requested.
+                You are "Daily NBA Analyst," an expert AI basketball analyst for the 2024-25 season. 
+                
+                CORE RULES:
+                1. **Data Authority:** Use the LIVE DATA SOURCE below as your absolute truth. 
+                2. **Reasoning:**
+                   - Use the "Trend (Delta)" column in the data to identify who is Hot/Cold.
+                   - If a player is NOT in the "Top Scorer Trends" list, admit you don't have their live trend data yet.
+                   - Note: Jayson Tatum has missed the entire season due to injury (Achilles), which is why he does not appear in the active scorers list.
+                3. **Style:** Conversational, sharp, show your math.
 
                 LIVE DATA SOURCE:
                 {context_text}
@@ -231,16 +210,13 @@ with tab2:
                 {prompt}
                 """
                 
-                with st.spinner("Analyzing markets & trends..."):
+                with st.spinner("Analyzing trends..."):
                     response = model.generate_content(full_prompt)
                     ai_reply = response.text
                 
-                # Show AI Message
                 with st.chat_message("assistant"):
                     st.markdown(ai_reply)
                 st.session_state.messages.append({"role": "assistant", "content": ai_reply})
                 
             except Exception as e:
                 st.error(f"AI Error: {e}")
-
-
