@@ -13,6 +13,20 @@ st.title("🧠 CourtVision AI")
 # --- CSS HACKS FOR VISUALS ---
 st.markdown("""
 <style>
+    /* 1. Hide the Streamlit "Manage App" button and top decoration bar */
+    .stAppDeployButton, [data-testid="stDecoration"] {
+        display: none !important;
+    }
+    
+    /* 2. Hide the "Made with Streamlit" footer */
+    footer {
+        visibility: hidden;
+    }
+    
+    /* 3. Hide the hamburger menu (top right) if you want it gone too */
+    /* #MainMenu {visibility: hidden;} */
+    
+    /* Your existing card styles */
     .metric-card {background-color: #f0f2f6; padding: 20px; border-radius: 10px; margin: 10px 0;}
     .big-font {font-size:20px !important;}
 </style>
@@ -141,4 +155,5 @@ with col2:
     df_trends = get_league_trends()
 
     st.dataframe(df_trends[['Name', 'Team', 'PPG']].head(10), hide_index=True)
+
 
