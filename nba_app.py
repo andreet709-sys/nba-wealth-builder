@@ -104,19 +104,21 @@ def get_league_trends():
         ).get_data_frames()[0]
 
         # 🛑 FIX: Filter out players who played fewer than 3 games in this span
-        # This eliminates the "Marcus Sasser Trap" (guys who had 1 good game but usually sit)
+        # This eliminates the "Marcus Sasser Trap"
         last5_stats = last5_stats[last5_stats['GP'] >= 3]
 
-        # --- MERGE THE DATA ---
+        # --- MERGE THE DATA (Now Fully Complete) ---
         merged = pd.merge(
             season_stats[['PLAYER_ID', 'PLAYER_NAME', 'PTS', 'REB', 'AST']], 
-            # ... rest of the code is the same
-       
+            last5_stats[['PLAYER_ID', 'PTS', 'REB', 'AST']], 
+            on='PLAYER_ID', 
+            suffixes=('_Season', '_L5')
+        )
+
         # --- CALCULATE TRENDS ---
         merged['Trend_PTS'] = merged['PTS_L5'] - merged['PTS_Season']
         
         # --- RENAME COLUMNS TO MATCH DASHBOARD ---
-        # This is the line that fixes the KeyError
         final_df = merged.rename(columns={
             'PLAYER_NAME': 'Player',
             'PTS_Season': 'Season PPG',
@@ -126,7 +128,6 @@ def get_league_trends():
 
         # --- STATUS LOGIC ---
         def get_status(row):
-            # We look at 'Trend (Delta)' now because we just renamed it
             delta = row['Trend (Delta)']
             if delta >= 4.0: return "🔥 Super Hot"
             elif delta >= 2.0: return "🔥 Heating Up"
@@ -136,7 +137,7 @@ def get_league_trends():
 
         final_df['Status'] = final_df.apply(get_status, axis=1)
 
-        # Return the rich dataset (sorted by Trend for impact)
+        # Return the rich dataset
         return final_df.sort_values(by='Trend (Delta)', ascending=False)
 
     except Exception as e:
@@ -322,6 +323,7 @@ with tab2:
                 
             except Exception as e:
                 st.error(f"AI Error: {e}")
+
 
 
 
