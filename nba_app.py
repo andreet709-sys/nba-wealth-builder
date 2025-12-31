@@ -205,7 +205,7 @@ with tab2:
             # 5. Call Gemini with CUSTOM INSTRUCTIONS
             try:
                 # Configure the model
-                model = genai.GenerativeModel('gemini-1.5-flash')
+                model = genai.GenerativeModel('gemini-2.5-flash')
                 
                 full_prompt = f"""
                 SYSTEM ROLE:
@@ -242,4 +242,5 @@ with tab2:
                 
             except Exception as e:
                 st.error(f"AI Error: {e}")
+
 
