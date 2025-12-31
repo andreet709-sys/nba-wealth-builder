@@ -1,13 +1,11 @@
 import streamlit as st
 import pandas as pd
 import requests
-import google.generativeai as genai
 import time
 from io import StringIO
-from datetime import datetime
-import pytz # Standard in most environments, but required for accurate scheduling
+from datetime import datetime # No pytz here
 
-# Updated NBA API imports to include Schedule and Defense tools
+# NBA API imports
 from nba_api.stats.endpoints import (
     playergamelog, 
     leaguedashplayerstats, 
@@ -392,6 +390,7 @@ with tab2:
                 
             except Exception as e:
                 st.error(f"AI Error: {e}")
+
 
 
 
