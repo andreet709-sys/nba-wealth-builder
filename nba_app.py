@@ -336,7 +336,7 @@ with tab2:
 
             try:
                 # --- MODEL CONFIGURATION ---
-                model = genai.GenerativeModel('gemini-2.0-flash')
+                model = genai.GenerativeModel(''gemini-1.5-flash'')
                 
                 full_prompt = f"""
                 SYSTEM ROLE:
@@ -366,3 +366,4 @@ with tab2:
                 
             except Exception as e:
                 st.error(f"AI Error: {e}")
+
