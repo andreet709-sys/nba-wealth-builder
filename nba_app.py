@@ -81,12 +81,23 @@ def clean_id(obj):
     except:
         return str(obj)
 
-# --- CONFIGURE GEMINI ---
+# --- CONFIGURE GEMINI with error handling ---
+gemini_model = None
+gemini_error = None
+
 try:
-    if "GOOGLE_API_KEY" in st.secrets:
+    if "GOOGLE_API_KEY" in st.secrets and st.secrets["GOOGLE_API_KEY"]:
         genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-except:
-    pass
+        # Try to list models to verify key works
+        available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        if available_models:
+            gemini_model = genai.GenerativeModel(available_models[0])  # Use first available (e.g. flash)
+        else:
+            gemini_error = "No generative models available with this key."
+    else:
+        gemini_error = "GOOGLE_API_KEY missing or empty in secrets."
+except Exception as e:
+    gemini_error = f"Gemini setup failed: {str(e)}"
 
 # --- CSS HACKS ---
 st.markdown("""
@@ -214,7 +225,7 @@ def get_league_trends_v4():
             elif d >= 3.0: return "🔥 Heating Up"
             elif d <= -5.0: return "❄️ Ice Cold"
             elif d <= -2.0: return "❄️ Cooling Down"
-            else: return "⚪ Steady"  # <--- Changed from "Zap" to "Steady" + neutral emoji
+            else: return "⚪ Steady"
         
         final_df['Status'] = final_df.apply(get_status, axis=1)
         
@@ -224,34 +235,16 @@ def get_league_trends_v4():
         return pd.DataFrame(columns=expected_cols)
 
 def generate_ai_response(prompt_text):
+    if gemini_error:
+        return f"Chat unavailable: {gemini_error}. Please check your Google API key in secrets."
+    
     try:
-        available = []
-        for m in genai.list_models():
-            if 'generateContent' in m.supported_generation_methods:
-                available.append(m.name)
-        
-        selected_model = None
-        for m in available:
-            if 'flash' in m and '1.5' in m:
-                selected_model = m
-                break
-        if not selected_model:
-            for m in available:
-                if 'pro' in m and '1.5' in m:
-                    selected_model = m
-                    break
-        if not selected_model:
-            for m in available:
-                if 'gemini' in m:
-                    selected_model = m
-                    break
-        if not selected_model:
-            return "Error: No AI models found."
-        
-        model = genai.GenerativeModel(selected_model)
-        return model.generate_content(prompt_text).text
+        if gemini_model:
+            return gemini_model.generate_content(prompt_text).text
+        else:
+            return "Gemini model not initialized."
     except Exception as e:
-        return f"System Error: {e}"
+        return f"Gemini error: {str(e)}"
 
 # --- MAIN APP LAYOUT ---
 tab1, tab2 = st.tabs(["📊 Dashboard", "🧠 CourtVision IQ"])
@@ -294,23 +287,27 @@ with tab1:
     
     st.subheader("🔥 Trends (Top Scorers)")
     if not trends.empty:
-        st.dataframe(trends.head(100), hide_index=True)  # Show top 100 instead of 15
+        st.dataframe(trends.head(15), hide_index=True)
     else:
         st.warning("⚠️ Market Data Unavailable.")
 
 with tab2:
     st.header("CourtVision IQ Chat")
-    if "messages" not in st.session_state: st.session_state.messages = []
-    for msg in st.session_state.messages:
-        with st.chat_message(msg["role"]): st.markdown(msg["content"])
-    if prompt := st.chat_input("Ask about matchups..."):
-        with st.chat_message("user"): st.markdown(prompt)
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        with st.spinner("Analyzing..."):
-            context = f"TRENDS DATA:\n{trends.to_string()}\n\nINJURIES:\n{injuries}"
-            final_prompt = f"ROLE: NBA Analyst. DATA: {context}. QUESTION: {prompt}"
-            reply = generate_ai_response(final_prompt)
-        
-        with st.chat_message("assistant"): st.markdown(reply)
-        st.session_state.messages.append({"role": "assistant", "content": reply})
-
+    
+    if gemini_error:
+        st.error(f"Chat feature unavailable: {gemini_error}")
+        st.info("Please add a valid GOOGLE_API_KEY to your secrets.toml file.")
+    else:
+        if "messages" not in st.session_state: st.session_state.messages = []
+        for msg in st.session_state.messages:
+            with st.chat_message(msg["role"]): st.markdown(msg["content"])
+        if prompt := st.chat_input("Ask about matchups..."):
+            with st.chat_message("user"): st.markdown(prompt)
+            st.session_state.messages.append({"role": "user", "content": prompt})
+            with st.spinner("Analyzing..."):
+                context = f"TRENDS DATA:\n{trends.to_string()}\n\nINJURIES:\n{injuries}"
+                final_prompt = f"ROLE: NBA Analyst. DATA: {context}. QUESTION: {prompt}"
+                reply = generate_ai_response(final_prompt)
+            
+            with st.chat_message("assistant"): st.markdown(reply)
+            st.session_state.messages.append({"role": "assistant", "content": reply})
