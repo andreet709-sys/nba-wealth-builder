@@ -28,15 +28,26 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+import pandas as pd
+import requests
+from io import StringIO
+import time
+from nba_api.stats.endpoints import leaguedashplayerstats, commonallplayers
+
 # --- CACHED FUNCTIONS ---
-@st.cache_data(ttl=86400) # Cache this map for 24 hours (rosters don't change often)
+
+@st.cache_data(ttl=86400) # Cache for 24 hours
 def get_team_map():
     try:
-        # Pull all players who have played at least 1 minute this season to get their Team ID
-        df = leaguedashplayerstats.LeagueDashPlayerStats(season='2025-26', per_mode_detailed='PerGame').get_data_frames()[0]
-        # Create a dictionary: {'LeBron James': 'LAL', 'Stephen Curry': 'GSW'}
-        return pd.Series(df.TEAM_ABBREVIATION.values, index=df.PLAYER_NAME).to_dict()
-    except:
+        # 1. Use CommonAllPlayers to get EVERYONE (active, inactive, G-League, etc.)
+        # This fixes the "Unknown Team" bug for injured stars.
+        roster = commonallplayers.CommonAllPlayers(is_only_current_season=1).get_data_frames()[0]
+        
+        # Create a dictionary: {'LeBron James': 'LAL', ...}
+        # We ensure names are stripped of extra spaces
+        return pd.Series(roster.TEAM_ABBREVIATION.values, index=roster.DISPLAY_FIRST_LAST).to_dict()
+    except Exception as e:
+        print(f"Error fetching Team Map: {e}")
         return {}
 
 @st.cache_data(ttl=3600)
@@ -44,7 +55,7 @@ def get_live_injuries():
     url = "https://www.cbssports.com/nba/injuries/"
     headers = {"User-Agent": "Mozilla/5.0"}
     
-    # 1. Get the Official Roster Map
+    # Get the PROPER roster map (now includes injured players)
     team_map = get_team_map()
     
     try:
@@ -55,74 +66,83 @@ def get_live_injuries():
         for df in tables:
             if 'Player' in df.columns:
                 for _, row in df.iterrows():
-                    # The name comes in "Dirty" (e.g., "M. PlumleeMason Plumlee")
                     dirty_name = str(row['Player']).strip()
                     status = str(row['Injury Status'])
                     
-                    # 2. SMART MATCH LOGIC
-                    # Instead of exact match, we check if a Real Name is INSIDE the Dirty Name
-                    clean_name = dirty_name # Default fallback
+                    # Logic to clean the name
+                    clean_name = dirty_name
                     team_code = "Unknown"
                     
-                    # Scan our official roster to find the real player hidden in the text
+                    # Try to match against our Master List
                     for official_name, team in team_map.items():
                         if official_name in dirty_name:
                             clean_name = official_name
                             team_code = team
-                            break # We found him, stop searching
+                            break 
                     
-                    # 3. Save as "Status (TEAM)"
+                    # Store as structured data
                     injuries[clean_name] = f"{status} ({team_code})"
                     
         return injuries
     except:
         return {}
 
-@st.cache_data(ttl=1200)  # Cache for 20 mins since this scrapes many players
+@st.cache_data(ttl=600) # Update every 10 mins
 def get_league_trends():
     try:
-        # 1. Get Top 15 Scorers (Season Avg) - UPDATED TO 2025-26
-        stats = leaguedashplayerstats.LeagueDashPlayerStats(season='2025-26', per_mode_detailed='PerGame').get_data_frames()[0]
-        
-        if stats.empty:
-            return pd.DataFrame(columns=['Player', 'Season PPG', 'Last 5 PPG', 'Trend (Delta)', 'Status'])
+        # --- CALL 1: WHOLE LEAGUE SEASON AVERAGES (1 API Call) ---
+        # We fetch PTS, REB, AST for everyone.
+        season_stats = leaguedashplayerstats.LeagueDashPlayerStats(
+            season='2025-26', 
+            per_mode_detailed='PerGame'
+        ).get_data_frames()[0]
 
-        top_players = stats.sort_values(by='PTS', ascending=False).head(15)
-        
-        trend_data = []
-        
-        # 2. Loop through them to get "Last 5" context
-        for _, p in top_players.iterrows():
-            try:
-                # Fetch game logs for this specific player - UPDATED TO 2025-26
-                logs = playergamelog.PlayerGameLog(player_id=p['PLAYER_ID'], season='2025-26').get_data_frames()[0]
-                
-                if not logs.empty:
-                    last_5 = logs.head(5)
-                    l5_ppg = last_5['PTS'].mean()
-                    season_ppg = p['PTS']
-                    delta = l5_ppg - season_ppg
-                    
-                    trend_data.append({
-                        "Player": p['PLAYER_NAME'],
-                        "Season PPG": round(season_ppg, 1),
-                        "Last 5 PPG": round(l5_ppg, 1),
-                        "Trend (Delta)": round(delta, 1),
-                        "Status": "🔥 Heating Up" if delta > 2.0 else "❄️ Cooling Down" if delta < -2.0 else "Zap"
-                    })
-                time.sleep(0.1) # Tiny pause to be nice to NBA API
-            except:
-                continue
-        
-        # SAFETY CHECK: If no data was collected, return empty structure to prevent crash
-        if not trend_data:
-            return pd.DataFrame(columns=['Player', 'Season PPG', 'Last 5 PPG', 'Trend (Delta)', 'Status'])
-            
-        return pd.DataFrame(trend_data)
+        # --- CALL 2: WHOLE LEAGUE LAST 5 GAMES (1 API Call) ---
+        # "LastNGames=5" does the filtering for us on the server side!
+        last5_stats = leaguedashplayerstats.LeagueDashPlayerStats(
+            season='2025-26', 
+            per_mode_detailed='PerGame', 
+            last_n_games=5
+        ).get_data_frames()[0]
+
+        # --- MERGE THE DATA ---
+        # We merge on PLAYER_ID to ensure accuracy
+        merged = pd.merge(
+            season_stats[['PLAYER_ID', 'PLAYER_NAME', 'PTS', 'REB', 'AST']], 
+            last5_stats[['PLAYER_ID', 'PTS', 'REB', 'AST']], 
+            on='PLAYER_ID', 
+            suffixes=('_Season', '_L5')
+        )
+
+        # --- CALCULATE TRENDS ---
+        # Now we have the data for the WHOLE league, not just 15 guys.
+        merged['Trend_PTS'] = merged['PTS_L5'] - merged['PTS_Season']
+        merged['Trend_REB'] = merged['REB_L5'] - merged['REB_Season']
+        merged['Trend_AST'] = merged['AST_L5'] - merged['AST_Season']
+
+        # Clean up columns for the display
+        final_df = merged.rename(columns={
+            'PLAYER_NAME': 'Player',
+            'PTS_Season': 'Season PPG',
+            'PTS_L5': 'Last 5 PPG'
+        })
+
+        # Add Status Label (based on Points for now, but we have data for all)
+        def get_status(row):
+            if row['Trend_PTS'] >= 4.0: return "🔥 Super Hot"
+            elif row['Trend_PTS'] >= 2.0: return "🔥 Heating Up"
+            elif row['Trend_PTS'] <= -3.0: return "❄️ Ice Cold"
+            elif row['Trend_PTS'] <= -1.5: return "❄️ Cooling Down"
+            else: return "Zap"
+
+        final_df['Status'] = final_df.apply(get_status, axis=1)
+
+        # Return the rich dataset (sorted by Trend for impact)
+        return final_df.sort_values(by='Trend_PTS', ascending=False)
 
     except Exception as e:
-        # Fallback if the NBA API fails entirely
-        return pd.DataFrame(columns=['Player', 'Season PPG', 'Last 5 PPG', 'Trend (Delta)', 'Status'])
+        # Fallback
+        return pd.DataFrame()
 
 # --- CREATE TABS ---
 tab1, tab2 = st.tabs(["📊 Dashboard", "🧠 CourtVision IQ"])
@@ -291,6 +311,7 @@ with tab2:
                 
             except Exception as e:
                 st.error(f"AI Error: {e}")
+
 
 
 
