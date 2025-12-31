@@ -58,6 +58,21 @@ if not check_password():
 # ==========================================
 st.title("🧠 CourtVision AI")
 
+# --- HELPER: Determine current NBA season ---
+def get_current_season():
+    """Returns current NBA season string (e.g., '2025-26') based on today's date."""
+    today = datetime.now(timezone.utc)
+    year = today.year
+    month = today.month
+    
+    # NBA season starts in October
+    if month >= 10:
+        return f"{year}-{str(year+1)[-2:]}"
+    else:
+        return f"{year-1}-{str(year)[-2:]}"
+
+current_season_str = get_current_season()
+
 # --- HELPER: DATA SCRUBBER ---
 def clean_id(obj):
     """Forces any ID to a clean string."""
@@ -114,7 +129,7 @@ def get_defensive_rankings_v4():
     defense_map = {}
     try:
         teams_data = leaguedashteamstats.LeagueDashTeamStats(
-            season='2025-26',
+            season=current_season_str,  # <--- Now dynamic
             measure_type_detailed_defense='Advanced'
         ).get_data_frames()[0]
         teams_data = teams_data.sort_values(by='DEF_RATING', ascending=False)
@@ -154,15 +169,15 @@ def get_todays_games_v4():
 
 @st.cache_data(ttl=600)
 def get_league_trends_v4():
-    expected_cols = ['Player', 'Matchup', 'Season PPG', 'Last 5 PPG', 'Trend (Delta)', 'Status']
+    expected_cols = ['Player', 'Matchup', 'Season PPG', 'Last 5 PPG', 'Season PRA', 'Last 5 PRA', 'PRA Delta', 'Status']
     try:
-        season = leaguedashplayerstats.LeagueDashPlayerStats(season='2025-26', per_mode_detailed='PerGame').get_data_frames()[0]
-        l5 = leaguedashplayerstats.LeagueDashPlayerStats(season='2025-26', per_mode_detailed='PerGame', last_n_games=5).get_data_frames()[0]
+        season = leaguedashplayerstats.LeagueDashPlayerStats(season=current_season_str, per_mode_detailed='PerGame').get_data_frames()[0]
+        l5 = leaguedashplayerstats.LeagueDashPlayerStats(season=current_season_str, per_mode_detailed='PerGame', last_n_games=5).get_data_frames()[0]
         l5 = l5[l5['GP'] >= 3]
         merged = pd.merge(season[['PLAYER_ID', 'PLAYER_NAME', 'TEAM_ID', 'PTS', 'REB', 'AST']],
                           l5[['PLAYER_ID', 'PTS', 'REB', 'AST']], on='PLAYER_ID', suffixes=('_Season', '_L5'))
         
-        # ADD PRA CALCULATIONS HERE
+        # PRA calculations
         merged['PRA_Season'] = merged['PTS_Season'] + merged['REB_Season'] + merged['AST_Season']
         merged['PRA_L5'] = merged['PTS_L5'] + merged['REB_L5'] + merged['AST_L5']
         merged['PRA Delta'] = merged['PRA_L5'] - merged['PRA_Season']
@@ -192,9 +207,6 @@ def get_league_trends_v4():
             'PRA_L5': 'Last 5 PRA',
             'PRA Delta': 'PRA Delta'
         })
-        
-        # Update expected columns to include PRA
-        expected_cols = ['Player', 'Matchup', 'Season PPG', 'Last 5 PPG', 'Season PRA', 'Last 5 PRA', 'PRA Delta', 'Status']
         
         def get_status(row):
             d = row['PRA Delta']
