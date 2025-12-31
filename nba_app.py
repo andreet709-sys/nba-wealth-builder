@@ -174,7 +174,8 @@ def get_league_trends():
         cols = ['Player', 'Matchup', 'Season PPG', 'Last 5 PPG', 'Trend (Delta)', 'Status']
         return final_df[cols].sort_values(by='Trend (Delta)', ascending=False)
 
-    except Exception as e:
+    except Exception:
+        # Fallback in case of API failure
         return pd.DataFrame()
 
 @st.cache_data(ttl=3600)
@@ -391,6 +392,7 @@ with tab2:
                 
             except Exception as e:
                 st.error(f"AI Error: {e}")
+
 
 
 
