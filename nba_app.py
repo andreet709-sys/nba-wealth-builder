@@ -3,7 +3,7 @@ import pandas as pd
 import requests
 import time
 from io import StringIO
-from datetime import datetime
+from datetime import datetime, timedelta
 import google.generativeai as genai
 
 # NBA API imports
@@ -20,7 +20,16 @@ from nba_api.stats.static import players
 st.set_page_config(page_title="CourtVision AI", page_icon="🧠", layout="wide")
 st.title("🧠 CourtVision AI")
 
+# --- HELPER: DATA SCRUBBER ---
+def clean_id(obj):
+    """Forces any ID (float, int, str) into a clean string without decimals."""
+    try:
+        return str(int(float(obj)))
+    except:
+        return str(obj)
+
 # --- CONFIGURE GEMINI AI ---
+# We try to configure it, but we won't crash if the key is bad
 try:
     if "GOOGLE_API_KEY" in st.secrets:
         genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
@@ -40,21 +49,18 @@ st.markdown("""
 
 # --- CACHED FUNCTIONS ---
 
-@st.cache_data(ttl=86400) # Cache for 24 hours
+@st.cache_data(ttl=86400) 
 def get_team_map():
     try:
-        # 1. Use CommonAllPlayers to get EVERYONE (active, inactive, G-League, etc.)
         roster = commonallplayers.CommonAllPlayers(is_only_current_season=1).get_data_frames()[0]
         return pd.Series(roster.TEAM_ABBREVIATION.values, index=roster.DISPLAY_FIRST_LAST).to_dict()
-    except Exception as e:
+    except Exception:
         return {}
 
 @st.cache_data(ttl=3600)
 def get_live_injuries():
     url = "https://www.cbssports.com/nba/injuries/"
     headers = {"User-Agent": "Mozilla/5.0"}
-    
-    # Get the PROPER roster map
     team_map = get_team_map()
     
     try:
@@ -67,7 +73,6 @@ def get_live_injuries():
                 for _, row in df.iterrows():
                     dirty_name = str(row['Player']).strip()
                     status = str(row['Injury Status'])
-                    
                     clean_name = dirty_name
                     team_code = "Unknown"
                     
@@ -78,45 +83,47 @@ def get_live_injuries():
                             break 
                     
                     injuries[clean_name] = f"{status} ({team_code})"
-                    
         return injuries
     except:
         return {}
 
-@st.cache_data(ttl=86400) # Cache daily
+@st.cache_data(ttl=86400) 
 def get_defensive_rankings():
-    """Fetches current defensive ratings for all 30 teams."""
+    """Fetches defensive ratings and SCRUBS the Team IDs."""
     try:
         teams = leaguedashteamstats.LeagueDashTeamStats(season='2025-26').get_data_frames()[0]
-        teams = teams.sort_values(by='DEF_RATING', ascending=False) # Worst defenses at the top
+        teams = teams.sort_values(by='DEF_RATING', ascending=False)
         
         defense_map = {}
         for _, row in teams.iterrows():
-            # 🛑 FIX: Force Team ID to String
-            defense_map[str(row['TEAM_ID'])] = {
+            # 🧼 SCRUB THE ID
+            clean_team_id = clean_id(row['TEAM_ID'])
+            defense_map[clean_team_id] = {
                 'Team': row['TEAM_NAME'],
                 'Rating': row['DEF_RATING']
             }
         return defense_map
-    except Exception as e:
+    except Exception:
         return {}
 
 @st.cache_data(ttl=3600)
 def get_todays_games():
-    """Finds out who is playing TODAY."""
+    """Finds today's games using explicit Eastern Time."""
     try:
-        # 🛑 FIX: Ensure we catch games even if server time is slightly off
-        today = datetime.now().strftime('%m/%d/%Y')
-        board = scoreboardv2.ScoreboardV2(game_date=today).get_data_frames()[0]
+        # 🕒 FORCE EASTERN TIME (Server Time - 5 Hours) to ensure we get the right date
+        # This fixes the "No Game" bug for Nurkić
+        game_date = (datetime.utcnow() - timedelta(hours=5)).strftime('%m/%d/%Y')
         
+        board = scoreboardv2.ScoreboardV2(game_date=game_date).get_data_frames()[0]
         games = {}
+        
         if board.empty:
             return {}
             
         for _, row in board.iterrows():
-            # 🛑 FIX: Force Team IDs to String
-            home_id = str(row['HOME_TEAM_ID'])
-            visitor_id = str(row['VISITOR_TEAM_ID'])
+            # 🧼 SCRUB THE IDs
+            home_id = clean_id(row['HOME_TEAM_ID'])
+            visitor_id = clean_id(row['VISITOR_TEAM_ID'])
             
             games[home_id] = visitor_id
             games[visitor_id] = home_id
@@ -125,13 +132,12 @@ def get_todays_games():
     except Exception:
         return {}
 
-@st.cache_data(ttl=600) # Update every 10 mins
+@st.cache_data(ttl=600) 
 def get_league_trends():
-    # Define the columns we EXPECT to have. This is our safety net.
     expected_cols = ['Player', 'Matchup', 'Season PPG', 'Last 5 PPG', 'Trend (Delta)', 'Status']
     
     try:
-        # --- 1. GET THE DATA ---
+        # --- 1. GET DATA ---
         season_stats = leaguedashplayerstats.LeagueDashPlayerStats(
             season='2025-26', per_mode_detailed='PerGame'
         ).get_data_frames()[0]
@@ -140,7 +146,6 @@ def get_league_trends():
             season='2025-26', per_mode_detailed='PerGame', last_n_games=5
         ).get_data_frames()[0]
 
-        # FILTER: Consistency Check (Must play 3+ games to be "Trending")
         last5_stats = last5_stats[last5_stats['GP'] >= 3]
 
         # --- 2. MERGE ---
@@ -158,8 +163,8 @@ def get_league_trends():
         defense = get_defensive_rankings() 
 
         def analyze_matchup(row):
-            # 🛑 FIX: Force Player's Team ID to String to match the keys
-            my_team = str(row['TEAM_ID'])
+            # 🧼 SCRUB THE ID to match our maps
+            my_team = clean_id(row['TEAM_ID'])
             
             if my_team not in games:
                 return "No Game"
@@ -184,7 +189,6 @@ def get_league_trends():
             'PTS_L5': 'Last 5 PPG'
         })
 
-        # Add Status
         def get_status(row):
             d = row['Trend (Delta)']
             if d >= 4.0: return "🔥 Super Hot"
@@ -194,12 +198,9 @@ def get_league_trends():
             else: return "Zap"
 
         final_df['Status'] = final_df.apply(get_status, axis=1)
-
-        # Return organized data
         return final_df[expected_cols].sort_values(by='Trend (Delta)', ascending=False)
 
-    except Exception as e:
-        # 🛡️ SAFETY NET: If anything fails, return an empty table WITH HEADERS
+    except Exception:
         return pd.DataFrame(columns=expected_cols)
 
 # --- CREATE TABS ---
@@ -211,62 +212,46 @@ tab1, tab2 = st.tabs(["📊 Dashboard", "🧠 CourtVision IQ"])
 with tab1:
     st.markdown("### *Daily Intelligence Agent*")
 
-    # 1. SIDEBAR (Dynamic Injury Scanner)
     with st.sidebar:
         st.header("🌞 Morning Briefing")
         st.info("Live Injury Report Loaded from CBS Sports")
         
-        # Load Data
         injuries = get_live_injuries()
         trends = get_league_trends() 
         
-        # --- NEW COLLAPSIBLE SECTION ---
-        with st.expander("⚠️ Impact Players OUT (Click to View)", expanded=False):
+        with st.expander("⚠️ Impact Players OUT", expanded=False):
             found_impact_injury = False
-            
             if not trends.empty and 'Player' in trends.columns:
-                # FILTER: Only show "Impact" players (e.g., > 12 PPG)
                 impact_df = trends[trends['Season PPG'] > 12]
                 impact_names = impact_df['Player'].tolist()
-                
                 for star in impact_names:
                     for injured_player, status in injuries.items():
                         if star in injured_player: 
                             st.error(f"**{star}**: {status}")
                             found_impact_injury = True
-            
             if not found_impact_injury:
-                st.success("✅ No major impact players (>12 PPG) listed as out.")
+                st.success("✅ No major impact players (>12 PPG) out.")
         
         st.write("---")
-        
-        # Full Database Access
-        st.caption(f"Tracking {len(injuries)} total league injuries.")
-        with st.expander("🚑 View Full Roster Report"):
-             if injuries:
-                 df_inj = pd.DataFrame(list(injuries.items()), columns=["Player", "Status"])
-                 st.dataframe(df_inj, hide_index=True, height=400)
-             else:
-                 st.write("No data available.")
+        st.caption(f"Tracking {len(injuries)} injuries.")
 
     col1, col2 = st.columns([2, 1])
 
     with col1:
         st.subheader("🔎 Player Deep Dive")
-        player_name = st.text_input("Enter Player Name (e.g. 'Jayson Tatum'):", placeholder="Type name here...")
+        player_name = st.text_input("Enter Player Name:", placeholder="e.g. 'Jayson Tatum'")
 
         if player_name:
             matching_players = [p for p in players.get_active_players() 
                                if player_name.lower() in p['full_name'].lower()]
             
             if not matching_players:
-                st.error("Player not found. Check spelling.")
+                st.error("Player not found.")
             else:
                 p = matching_players[0]
                 st.success(f"Found: {p['full_name']}")
                 with st.spinner('Crunching numbers...'):
                     try:
-                        # UPDATED TO 2025-26
                         career = leaguedashplayerstats.LeagueDashPlayerStats(season='2025-26', per_mode_detailed='PerGame').get_data_frames()[0]
                         player_season = career[career['PLAYER_ID'] == p['id']]
                         logs = playergamelog.PlayerGameLog(player_id=p['id'], season='2025-26').get_data_frames()[0]
@@ -288,34 +273,29 @@ with tab1:
                             chart_data = logs.head(10).iloc[::-1].set_index('GAME_DATE')[['PRA']]
                             st.line_chart(chart_data)
                         else:
-                            st.warning("No data found for 2025-26 season yet.")
+                            st.warning("No data found for this season.")
                     except Exception as e:
-                        st.error(f"Error fetching data: {e}")
+                        st.error(f"Error: {e}")
 
     with col2:
         st.subheader("🔥 Trends (Top Scorers)")
         df_trends = get_league_trends()
         
-        # 🛡️ SAFETY CHECK: Only try to show data if the columns actually exist
         if not df_trends.empty and 'Trend (Delta)' in df_trends.columns:
-            # Reorder columns to put Matchup first (if it exists)
             display_cols = ['Player', 'Matchup', 'Season PPG', 'Last 5 PPG', 'Trend (Delta)', 'Status']
-            # Filter to only columns that are actually present
             valid_cols = [c for c in display_cols if c in df_trends.columns]
-            
             st.dataframe(df_trends[valid_cols].head(10), hide_index=True)
         else:
-            st.warning("⚠️ Market Data Unavailable. The NBA API connection may be down temporarily.")
+            st.warning("⚠️ Market Data Unavailable.")
 
 # ==========================================
-# TAB 2: CourtVision IQ (GEMINI CHATBOT)
+# TAB 2: CourtVision IQ
 # ==========================================
 with tab2:
     st.header("CourtVision IQ Chat")
-    st.info("💡 I have read today's injury reports and calculated the Last-5-Game trends for top scorers.")
 
     if "GOOGLE_API_KEY" not in st.secrets:
-        st.error("⚠️ **Missing AI Key:** Please add `GOOGLE_API_KEY` to your Streamlit Secrets.")
+        st.error("⚠️ Missing API Key in Secrets.")
     else:
         if "messages" not in st.session_state:
             st.session_state.messages = []
@@ -324,49 +304,35 @@ with tab2:
             with st.chat_message(message["role"]):
                 st.markdown(message["content"])
 
-        if prompt := st.chat_input("Ex: Who is heating up right now?"):
+        if prompt := st.chat_input("Ex: Who is heating up?"):
             with st.chat_message("user"):
                 st.markdown(prompt)
             st.session_state.messages.append({"role": "user", "content": prompt})
 
-            # Prepare Data Context
             injuries_data = get_live_injuries()
             trends_data = get_league_trends()
             
             context_text = f"""
-            LIVE DATA SOURCE (Primary Truth):
-            
-            1. INJURY REPORT (CBS Sports):
-            {injuries_data}
-            
-            2. TOP SCORER TRENDS (Calculated Last 5 Games vs Season):
-            {trends_data.to_string() if not trends_data.empty else "Data Unavailable"}
+            LIVE DATA:
+            1. INJURY REPORT: {injuries_data}
+            2. TRENDS: {trends_data.to_string() if not trends_data.empty else "Unavailable"}
             """
 
             try:
-                # --- MODEL CONFIGURATION ---
-                # Changed to 'gemini-pro' to prevent 404/Quota errors on free tier
-                model = genai.GenerativeModel('gemini-pro')
+                # 🤖 ROBUST AI MODEL SELECTION
+                # Tries '1.5-flash' (Newest Free). If that fails, falls back to 'pro' (Stable Free).
+                try:
+                    model = genai.GenerativeModel('gemini-1.5-flash')
+                except:
+                    model = genai.GenerativeModel('gemini-pro')
                 
                 full_prompt = f"""
-                SYSTEM ROLE:
-                You are "Daily NBA Analyst," an expert AI basketball analyst for the 2025-26 season. 
-                
-                CORE RULES:
-                1. **Data Authority:** Use the LIVE DATA SOURCE below as your absolute truth. 
-                2. **Reasoning:**
-                   - Use the "Trend (Delta)" column in the data to identify who is Hot/Cold.
-                   - If a player is NOT in the "Top Scorer Trends" list, admit you don't have their live trend data yet.
-                3. **Style:** Conversational, sharp, show your math.
-
-                LIVE DATA SOURCE:
-                {context_text}
-                
-                USER QUESTION:
-                {prompt}
+                ROLE: Expert NBA Analyst (2025-26 Season).
+                DATA: Use this source only: {context_text}
+                QUESTION: {prompt}
                 """
                 
-                with st.spinner("Analyzing trends..."):
+                with st.spinner("Thinking..."):
                     response = model.generate_content(full_prompt)
                     ai_reply = response.text
                 
@@ -375,4 +341,4 @@ with tab2:
                 st.session_state.messages.append({"role": "assistant", "content": ai_reply})
                 
             except Exception as e:
-                st.error(f"AI Error: {e}")
+                st.error(f"AI Error: {e}. Try checking your API Key quotas.")
