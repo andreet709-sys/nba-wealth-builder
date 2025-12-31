@@ -91,14 +91,12 @@ def get_live_injuries():
 def get_league_trends():
     try:
         # --- CALL 1: WHOLE LEAGUE SEASON AVERAGES (1 API Call) ---
-        # We fetch PTS, REB, AST for everyone.
         season_stats = leaguedashplayerstats.LeagueDashPlayerStats(
             season='2025-26', 
             per_mode_detailed='PerGame'
         ).get_data_frames()[0]
 
         # --- CALL 2: WHOLE LEAGUE LAST 5 GAMES (1 API Call) ---
-        # "LastNGames=5" does the filtering for us on the server side!
         last5_stats = leaguedashplayerstats.LeagueDashPlayerStats(
             season='2025-26', 
             per_mode_detailed='PerGame', 
@@ -106,7 +104,6 @@ def get_league_trends():
         ).get_data_frames()[0]
 
         # --- MERGE THE DATA ---
-        # We merge on PLAYER_ID to ensure accuracy
         merged = pd.merge(
             season_stats[['PLAYER_ID', 'PLAYER_NAME', 'PTS', 'REB', 'AST']], 
             last5_stats[['PLAYER_ID', 'PTS', 'REB', 'AST']], 
@@ -115,30 +112,31 @@ def get_league_trends():
         )
 
         # --- CALCULATE TRENDS ---
-        # Now we have the data for the WHOLE league, not just 15 guys.
         merged['Trend_PTS'] = merged['PTS_L5'] - merged['PTS_Season']
-        merged['Trend_REB'] = merged['REB_L5'] - merged['REB_Season']
-        merged['Trend_AST'] = merged['AST_L5'] - merged['AST_Season']
-
-        # Clean up columns for the display
+        
+        # --- RENAME COLUMNS TO MATCH DASHBOARD ---
+        # This is the line that fixes the KeyError
         final_df = merged.rename(columns={
             'PLAYER_NAME': 'Player',
             'PTS_Season': 'Season PPG',
-            'PTS_L5': 'Last 5 PPG'
+            'PTS_L5': 'Last 5 PPG',
+            'Trend_PTS': 'Trend (Delta)' 
         })
 
-        # Add Status Label (based on Points for now, but we have data for all)
+        # --- STATUS LOGIC ---
         def get_status(row):
-            if row['Trend_PTS'] >= 4.0: return "🔥 Super Hot"
-            elif row['Trend_PTS'] >= 2.0: return "🔥 Heating Up"
-            elif row['Trend_PTS'] <= -3.0: return "❄️ Ice Cold"
-            elif row['Trend_PTS'] <= -1.5: return "❄️ Cooling Down"
+            # We look at 'Trend (Delta)' now because we just renamed it
+            delta = row['Trend (Delta)']
+            if delta >= 4.0: return "🔥 Super Hot"
+            elif delta >= 2.0: return "🔥 Heating Up"
+            elif delta <= -3.0: return "❄️ Ice Cold"
+            elif delta <= -1.5: return "❄️ Cooling Down"
             else: return "Zap"
 
         final_df['Status'] = final_df.apply(get_status, axis=1)
 
         # Return the rich dataset (sorted by Trend for impact)
-        return final_df.sort_values(by='Trend_PTS', ascending=False)
+        return final_df.sort_values(by='Trend (Delta)', ascending=False)
 
     except Exception as e:
         # Fallback
@@ -311,6 +309,7 @@ with tab2:
                 
             except Exception as e:
                 st.error(f"AI Error: {e}")
+
 
 
 
