@@ -44,7 +44,7 @@ def get_live_injuries():
     url = "https://www.cbssports.com/nba/injuries/"
     headers = {"User-Agent": "Mozilla/5.0"}
     
-    # 1. Get the Roster Map first
+    # 1. Get the Official Roster Map
     team_map = get_team_map()
     
     try:
@@ -55,15 +55,24 @@ def get_live_injuries():
         for df in tables:
             if 'Player' in df.columns:
                 for _, row in df.iterrows():
-                    player_name = str(row['Player']).strip()
+                    # The name comes in "Dirty" (e.g., "M. PlumleeMason Plumlee")
+                    dirty_name = str(row['Player']).strip()
                     status = str(row['Injury Status'])
                     
-                    # 2. Find the Team Abbreviation
-                    # We try to find the name in our map. Default to "N/A" if not found.
-                    team_code = team_map.get(player_name, "Unknown")
+                    # 2. SMART MATCH LOGIC
+                    # Instead of exact match, we check if a Real Name is INSIDE the Dirty Name
+                    clean_name = dirty_name # Default fallback
+                    team_code = "Unknown"
                     
-                    # 3. Save as "Status (TEAM)" so the AI can read it
-                    injuries[player_name] = f"{status} ({team_code})"
+                    # Scan our official roster to find the real player hidden in the text
+                    for official_name, team in team_map.items():
+                        if official_name in dirty_name:
+                            clean_name = official_name
+                            team_code = team
+                            break # We found him, stop searching
+                    
+                    # 3. Save as "Status (TEAM)"
+                    injuries[clean_name] = f"{status} ({team_code})"
                     
         return injuries
     except:
@@ -282,5 +291,6 @@ with tab2:
                 
             except Exception as e:
                 st.error(f"AI Error: {e}")
+
 
 
