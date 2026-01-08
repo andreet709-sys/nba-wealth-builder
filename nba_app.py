@@ -324,13 +324,13 @@ with tab2:
             with st.chat_message(msg["role"]):
                 st.markdown(msg["content"])
         
-        if prompt := st.chat_input("Ask about matchups..."):
+if prompt := st.chat_input("Ask about matchups..."):
             with st.chat_message("user"):
                 st.markdown(prompt)
             st.session_state.messages.append({"role": "user", "content": prompt})
             
             with st.spinner("Analyzing..."):
-                # Pull fresh data inside chat to avoid scope issues
+                # Pull ALL data FRESH inside this block to avoid scope issues
                 todays_games = get_todays_games_v4()
                 team_map = get_team_map_v4()
                 games_str = "TODAY'S SCHEDULE (highest priority - use this first - IDs mapped to team names):\n"
@@ -342,11 +342,10 @@ with tab2:
                 else:
                     games_str += "No games data available today.\n"
                 
-                # Pull trends & injuries fresh
                 trends = get_league_trends_v4()
                 injuries = get_live_injuries_v4()
                 
-                # Trim trends for LLM
+                # Trim trends to readable format
                 trends_trimmed = ""
                 if not trends.empty:
                     top_trends = trends.head(20)
@@ -359,7 +358,7 @@ with tab2:
                 context = f"{games_str}\n\nTRENDS DATA (top 20):\n{trends_trimmed}\n\nINJURIES:\n{injuries}"
                 
                 final_prompt = f"""You are a sharp NBA betting analyst. FOLLOW THESE RULES STRICTLY - NO EXCEPTIONS:
-1. TODAY'S SCHEDULE IS GROUND TRUTH - ALWAYS use it FIRST for any matchup or game reference. IGNORE all news, articles, or internal knowledge from yesterday or earlier.
+1. TODAY'S SCHEDULE IS GROUND TRUTH - ALWAYS use it FIRST for any matchup, game, or opponent reference. IGNORE all news, articles, or internal knowledge from yesterday or earlier.
 2. Use ONLY the provided TRENDS DATA and INJURIES for ALL stats, deltas, PRA, trends, and injury impact - DO NOT use your own knowledge or web search for numbers, teams, or facts.
 3. REPEAT TODAY'S SCHEDULE (with team names) at the start of your answer to confirm you are using it.
 4. If any requested data is missing or not in the provided DATA, say exactly: "Data unavailable for this specific scenario from provided sources."
@@ -377,11 +376,11 @@ INJURIES:
 QUESTION: {prompt}"""
                 
                 reply = generate_ai_response(final_prompt)
-                st.write("DEBUG: Raw Gemini reply:", reply)  # Keep for now
-                
+            
             with st.chat_message("assistant"):
-                st.markdown(reply)
+                st.markdown(reply or "No reply received - check Gemini key or prompt.")
             st.session_state.messages.append({"role": "assistant", "content": reply})
+
 
 
 
