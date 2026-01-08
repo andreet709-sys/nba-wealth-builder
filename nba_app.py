@@ -321,10 +321,13 @@ with tab2:
         if "messages" not in st.session_state: st.session_state.messages = []
         for msg in st.session_state.messages:
             with st.chat_message(msg["role"]): st.markdown(msg["content"])
-        if prompt := st.chat_input("Ask about matchups..."):
-            with st.chat_message("user"): st.markdown(prompt)
+                if prompt := st.chat_input("Ask about matchups..."):
+            with st.chat_message("user"):
+                st.markdown(prompt)
             st.session_state.messages.append({"role": "user", "content": prompt})
-                        with st.spinner("Analyzing..."):
+            
+            with st.spinner("Analyzing..."):
+                # Get today's games fresh every chat
                 todays_games = get_todays_games_v4()
                 games_str = "TODAY'S SCHEDULE (most important - use this first):\n"
                 if todays_games:
@@ -334,10 +337,11 @@ with tab2:
                     games_str += "No games data available today.\n"
                 
                 context = f"{games_str}\n\nTRENDS DATA:\n{trends.to_string()}\n\nINJURIES:\n{injuries}"
-               final_prompt = f"""You are a sharp NBA betting analyst. 
+                
+                final_prompt = f"""You are a sharp NBA betting analyst. 
 GROUND TRUTH RULES (highest priority - never override):
-1. ALWAYS use TODAY'S SCHEDULE first for any matchup or game reference — ignore any news/articles from yesterday or earlier.
-2. Use ONLY the provided TRENDS DATA and INJURIES for stats, deltas, PRA, trends, and injury impact — do NOT use your internal knowledge or web search for numbers/teams.
+1. ALWAYS use TODAY'S SCHEDULE first for any matchup or game reference - ignore any news/articles from yesterday or earlier.
+2. Use ONLY the provided TRENDS DATA and INJURIES for stats, deltas, PRA, trends, and injury impact - do NOT use your internal knowledge or web search for numbers/teams.
 3. If data conflicts or is missing, say "Data unavailable for this" instead of guessing.
 4. Be accurate, evidence-based, and concise.
 
@@ -351,9 +355,11 @@ INJURIES:
 {injuries}
 
 QUESTION: {prompt}"""
+                
                 reply = generate_ai_response(final_prompt)
             
-            with st.chat_message("assistant"): st.markdown(reply)
+            with st.chat_message("assistant"):
+                st.markdown(reply)
             st.session_state.messages.append({"role": "assistant", "content": reply})
 
 
