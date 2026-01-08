@@ -129,7 +129,7 @@ st.markdown("""
 </script>
 """, unsafe_allow_html=True)
 # --- CACHED FUNCTIONS ---
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=900)
 def get_team_map_v4():
     try:
         nba_teams = static_teams.get_teams()
@@ -177,7 +177,7 @@ def get_defensive_rankings_v4():
             defense_map[tid] = {'Team': t['abbreviation'], 'Rating': 114.0}
     return defense_map
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=900)
 def get_todays_games_v4():
     try:
         now_utc = datetime.now(timezone.utc)
@@ -324,13 +324,22 @@ with tab2:
         if prompt := st.chat_input("Ask about matchups..."):
             with st.chat_message("user"): st.markdown(prompt)
             st.session_state.messages.append({"role": "user", "content": prompt})
-            with st.spinner("Analyzing..."):
-                context = f"TRENDS DATA:\n{trends.to_string()}\n\nINJURIES:\n{injuries}"
-                final_prompt = f"ROLE: NBA Analyst. DATA: {context}. QUESTION: {prompt}"
+                        with st.spinner("Analyzing..."):
+                todays_games = get_todays_games_v4()
+                games_str = "TODAY'S SCHEDULE (most important - use this first):\n"
+                if todays_games:
+                    for home, away in todays_games.items():
+                        games_str += f"{home} vs {away}\n"
+                else:
+                    games_str += "No games data available today.\n"
+                
+                context = f"{games_str}\n\nTRENDS DATA:\n{trends.to_string()}\n\nINJURIES:\n{injuries}"
+                final_prompt = f"ROLE: Sharp NBA betting analyst. ALWAYS use TODAY'S SCHEDULE above as ground truth for matchups - ignore old news/articles. DATA: {context}. QUESTION: {prompt}"
                 reply = generate_ai_response(final_prompt)
             
             with st.chat_message("assistant"): st.markdown(reply)
             st.session_state.messages.append({"role": "assistant", "content": reply})
+
 
 
 
