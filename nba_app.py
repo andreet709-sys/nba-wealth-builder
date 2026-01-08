@@ -318,53 +318,35 @@ with tab2:
         st.error(f"Chat feature unavailable: {gemini_error}")
         st.info("Please add a valid GOOGLE_API_KEY to your secrets.toml file.")
     else:
-        if "messages" not in st.session_state: st.session_state.messages = []
+        if "messages" not in st.session_state:
+            st.session_state.messages = []
         for msg in st.session_state.messages:
-            with st.chat_message(msg["role"]): st.markdown(msg["content"])
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
+        
         if prompt := st.chat_input("Ask about matchups..."):
             with st.chat_message("user"):
                 st.markdown(prompt)
             st.session_state.messages.append({"role": "user", "content": prompt})
             
-with st.spinner("Analyzing..."):
-                st.write("DEBUG: Starting analysis")  # Should show immediately
-                
+            with st.spinner("Analyzing..."):
+                # Pull fresh data inside chat to avoid scope issues
                 todays_games = get_todays_games_v4()
-                st.write("DEBUG: Got today's games")  # If this doesn't show, caching or function error
-                
-                games_str = "TODAY'S SCHEDULE (most important - use this first):\n"
-                if todays_games:
-                    for home, away in todays_games.items():
-                        games_str += f"{home} vs {away}\n"
-                else:
-                    games_str += "No games data available today.\n"
-                
-                st.write("DEBUG: Games string built")  # If this shows, context is ready
-                
-                context = f"{games_str}\n\nTRENDS DATA:\n{trends.to_string()}\n\nINJURIES:\n{injuries}"
-                final_prompt = f"""... (your strong prompt here)"""
-                
-                st.write("DEBUG: Prompt ready - length:", len(final_prompt))  # Shows if prompt is too long
-                
-                reply = generate_ai_response(final_prompt)
-                st.write("DEBUG: Raw reply from Gemini:", reply)  # This will show what Gemini actually returned
-                
-                if not reply:
-                    reply = "No response from AI - check Gemini key or prompt length."
-                # Get team map for readable schedule
                 team_map = get_team_map_v4()
-                
-                todays_games = get_todays_games_v4()
                 games_str = "TODAY'S SCHEDULE (highest priority - use this first - IDs mapped to team names):\n"
                 if todays_games:
                     for home_id, away_id in todays_games.items():
-                        home_name = team_map.get(str(home_id), "Unknown (" + str(home_id) + ")")
-                        away_name = team_map.get(str(away_id), "Unknown (" + str(away_id) + ")")
+                        home_name = team_map.get(str(home_id), f"Unknown ({home_id})")
+                        away_name = team_map.get(str(away_id), f"Unknown ({away_id})")
                         games_str += f"{home_name} vs {away_name}\n"
                 else:
                     games_str += "No games data available today.\n"
                 
-                # Trim trends to top 20 for token efficiency
+                # Pull trends & injuries fresh
+                trends = get_league_trends_v4()
+                injuries = get_live_injuries_v4()
+                
+                # Trim trends for LLM
                 trends_trimmed = ""
                 if not trends.empty:
                     top_trends = trends.head(20)
@@ -377,10 +359,10 @@ with st.spinner("Analyzing..."):
                 context = f"{games_str}\n\nTRENDS DATA (top 20):\n{trends_trimmed}\n\nINJURIES:\n{injuries}"
                 
                 final_prompt = f"""You are a sharp NBA betting analyst. FOLLOW THESE RULES STRICTLY - NO EXCEPTIONS:
-1. TODAY'S SCHEDULE IS GROUND TRUTH - ALWAYS use it FIRST for any matchup, game, or opponent reference. IGNORE all news, articles, or internal knowledge from yesterday or earlier.
+1. TODAY'S SCHEDULE IS GROUND TRUTH - ALWAYS use it FIRST for any matchup or game reference. IGNORE all news, articles, or internal knowledge from yesterday or earlier.
 2. Use ONLY the provided TRENDS DATA and INJURIES for ALL stats, deltas, PRA, trends, and injury impact - DO NOT use your own knowledge or web search for numbers, teams, or facts.
 3. REPEAT TODAY'S SCHEDULE (with team names) at the start of your answer to confirm you are using it.
-4. If any requested data (matchup, stats, injury impact) is missing or not in the provided DATA, say exactly: "Data unavailable for this specific scenario from provided sources."
+4. If any requested data is missing or not in the provided DATA, say exactly: "Data unavailable for this specific scenario from provided sources."
 5. Be accurate, concise, evidence-based. Show math. No speculation.
 
 TODAY'S SCHEDULE (REPEAT THIS IN YOUR ANSWER):
@@ -395,6 +377,12 @@ INJURIES:
 QUESTION: {prompt}"""
                 
                 reply = generate_ai_response(final_prompt)
+                st.write("DEBUG: Raw Gemini reply:", reply)  # Keep for now
+                
+            with st.chat_message("assistant"):
+                st.markdown(reply)
+            st.session_state.messages.append({"role": "assistant", "content": reply})
+
 
 
 
